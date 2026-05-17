@@ -13,8 +13,10 @@ import com.clist.global.exception.CustomException;
 import com.clist.global.exception.ErrorCode;
 import com.clist.global.util.SecurityUtil;
 import lombok.RequiredArgsConstructor;
+import org.springframework.http.codec.ServerSentEvent;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import reactor.core.publisher.Flux;
 
 import java.util.List;
 import java.util.UUID;
@@ -49,8 +51,7 @@ public class FeedbackService {
         return new FeedbackDto.SessionResponse(feedbackSessionRepository.save(session));
     }
 
-    @Transactional
-    public FeedbackDto.MessageResponse sendMessage(FeedbackDto.MessageRequest request) {
+    public Flux<ServerSentEvent<String>> sendMessageStream(FeedbackDto.MessageRequest request) {
         User user = getCurrentUser();
 
         FeedbackSession session = feedbackSessionRepository.findActiveSessionByUser(user)
@@ -59,7 +60,6 @@ public class FeedbackService {
         List<FeedbackMessage> history = feedbackMessageRepository
                 .findAllByFeedbackSessionOrderByCreatedAtAsc(session);
 
-        // 사용자 메시지 저장
         FeedbackMessage userMessage = FeedbackMessage.builder()
                 .feedbackSession(session)
                 .role("user")
@@ -67,22 +67,35 @@ public class FeedbackService {
                 .build();
         feedbackMessageRepository.save(userMessage);
 
-        // AI 응답 생성
-        String aiReply = feedbackAiService.generateReply(
-                session.getMdDocument().getContent(),
-                history,
-                request.getMessage()
-        );
+        StringBuilder fullResponse = new StringBuilder();
 
-        // AI 메시지 저장
+        return feedbackAiService.replyStream(session.getMdDocument().getContent(), history, request.getMessage())
+                .map(sse -> {
+                    if ("chunk".equals(sse.event()) && sse.data() != null) {
+                        fullResponse.append(sse.data());
+                    }
+                    return sse;
+                })
+                .doOnComplete(() -> {
+                    if (!fullResponse.isEmpty()) {
+                        FeedbackMessage assistantMessage = FeedbackMessage.builder()
+                                .feedbackSession(session)
+                                .role("assistant")
+                                .message(fullResponse.toString())
+                                .build();
+                        feedbackMessageRepository.save(assistantMessage);
+                    }
+                });
+    }
+
+    @Transactional
+    public void saveAssistantMessage(FeedbackSession session, String content) {
         FeedbackMessage assistantMessage = FeedbackMessage.builder()
                 .feedbackSession(session)
                 .role("assistant")
-                .message(aiReply)
+                .message(content)
                 .build();
         feedbackMessageRepository.save(assistantMessage);
-
-        return new FeedbackDto.MessageResponse(assistantMessage);
     }
 
     @Transactional(readOnly = true)
@@ -102,6 +115,29 @@ public class FeedbackService {
         return new FeedbackDto.SessionDetailResponse(session, messages);
     }
 
+    /**
+     * 세션 종료: summary 저장 + status CLOSED
+     */
+    @Transactional
+    public FeedbackDto.SessionResponse closeSession() {
+        User user = getCurrentUser();
+
+        FeedbackSession session = feedbackSessionRepository.findActiveSessionByUser(user)
+                .orElseThrow(() -> new CustomException(ErrorCode.FEEDBACK_NO_ACTIVE_SESSION.getStatus(), ErrorCode.FEEDBACK_NO_ACTIVE_SESSION.getMessage()));
+
+        List<FeedbackMessage> messages = feedbackMessageRepository
+                .findAllByFeedbackSessionOrderByCreatedAtAsc(session);
+
+        String summary = messages.isEmpty()
+                ? "대화 내역이 없습니다."
+                : feedbackAiService.generateSummary(session.getMdDocument().getTitle(), messages);
+
+        session.close(summary);
+        feedbackSessionRepository.save(session);
+
+        return new FeedbackDto.SessionResponse(session);
+    }
+
     @Transactional
     public void deleteSession(UUID sessionId) {
         User user = getCurrentUser();
@@ -111,17 +147,6 @@ public class FeedbackService {
 
         if (!session.getUser().getId().equals(user.getId())) {
             throw new CustomException(ErrorCode.FORBIDDEN.getStatus(), ErrorCode.FORBIDDEN.getMessage());
-        }
-
-        // 세션 종료 시 요약 생성
-        if ("ACTIVE".equals(session.getStatus())) {
-            List<FeedbackMessage> messages = feedbackMessageRepository
-                    .findAllByFeedbackSessionOrderByCreatedAtAsc(session);
-            if (!messages.isEmpty()) {
-                String summary = feedbackAiService.generateSummary(session.getMdDocument().getTitle(), messages);
-                session.close(summary);
-                feedbackSessionRepository.save(session);
-            }
         }
 
         feedbackSessionRepository.delete(session);

@@ -13,7 +13,7 @@ import java.util.UUID;
 public interface QuizQuestionRepository extends JpaRepository<QuizQuestion, UUID> {
     List<QuizQuestion> findAllByQuizSession(QuizSession quizSession);
 
-    @Query("SELECT qq FROM QuizQuestion qq WHERE qq.quizSession = :session AND qq.userAnswer IS NULL ORDER BY qq.createdAt ASC")
+    @Query("SELECT qq FROM QuizQuestion qq WHERE qq.quizSession = :session AND qq.userAnswer IS NULL ORDER BY qq.createdAt ASC LIMIT 1")
     Optional<QuizQuestion> findFirstUnansweredBySession(@Param("session") QuizSession session);
 
     @Query("SELECT qq FROM QuizQuestion qq WHERE qq.quizSession = :session AND qq.isCorrect IS NOT NULL")

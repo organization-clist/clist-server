@@ -20,7 +20,7 @@ public class LearningHistoryController {
     }
 
     @PostMapping("/update")
-    public ResponseEntity<ApiResponse<HistoryDto.Response>> update(@RequestBody HistoryDto.UpdateRequest request) {
-        return ResponseEntity.ok(ApiResponse.success(learningHistoryService.update(request)));
+    public ResponseEntity<ApiResponse<HistoryDto.Response>> update() {
+        return ResponseEntity.ok(ApiResponse.success(learningHistoryService.update()));
     }
 }

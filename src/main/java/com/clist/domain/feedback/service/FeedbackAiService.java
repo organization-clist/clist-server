@@ -1,10 +1,12 @@
 package com.clist.domain.feedback.service;
 
 import com.clist.domain.feedback.entity.FeedbackMessage;
-import com.clist.global.ai.OpenAiClient;
+import com.clist.global.ai.AIService;
 import com.clist.global.ai.OpenAiDto;
 import lombok.RequiredArgsConstructor;
+import org.springframework.http.codec.ServerSentEvent;
 import org.springframework.stereotype.Service;
+import reactor.core.publisher.Flux;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -13,19 +15,21 @@ import java.util.List;
 @RequiredArgsConstructor
 public class FeedbackAiService {
 
-    private final OpenAiClient openAiClient;
+    private final AIService aiService;
 
-    public String generateReply(String mdContent, List<FeedbackMessage> history, String userMessage) {
+    /**
+     * 피드백 답변 SSE 스트리밍
+     */
+    public Flux<ServerSentEvent<String>> replyStream(String mdContent, List<FeedbackMessage> history, String userMessage) {
         String systemPrompt = """
-                You are a learning assistant that helps users understand the content of a markdown document.
-                Analyze the content and provide helpful, concise feedback in Korean.
-                The user can ask questions about the content, request explanations, or ask for quizzes.
+                당신은 마크다운 문서를 기반으로 학습을 도와주는 AI 어시스턴트입니다.
+                문서 내용을 분석하고, 사용자의 질문에 친절하고 명확하게 한국어로 답변해주세요.
                 """;
 
         List<OpenAiDto.Message> messages = new ArrayList<>();
         messages.add(OpenAiDto.Message.builder()
                 .role("system")
-                .content(systemPrompt + "\n\nDocument Content:\n" + mdContent)
+                .content(systemPrompt + "\n\n[문서 내용]\n" + mdContent)
                 .build());
 
         for (FeedbackMessage msg : history) {
@@ -40,17 +44,13 @@ public class FeedbackAiService {
                 .content(userMessage)
                 .build());
 
-        return openAiClient.chat(messages);
+        return aiService.streamResponse(messages);
     }
 
     public String generateSummary(String mdTitle, List<FeedbackMessage> messages) {
-        String systemPrompt = """
-                You are a learning assistant. Summarize the feedback session in Korean.
-                Keep it concise (under 200 characters).
-                """;
+        String systemPrompt = "피드백 세션을 한국어로 간단히 요약해주세요. 200자 이내로 작성하세요.";
 
-        StringBuilder conversation = new StringBuilder();
-        conversation.append("MD Title: ").append(mdTitle).append("\n\n");
+        StringBuilder conversation = new StringBuilder("MD: ").append(mdTitle).append("\n");
         for (FeedbackMessage msg : messages) {
             conversation.append("[").append(msg.getRole()).append("]: ").append(msg.getMessage()).append("\n");
         }
@@ -60,6 +60,6 @@ public class FeedbackAiService {
                 OpenAiDto.Message.builder().role("user").content(conversation.toString()).build()
         );
 
-        return openAiClient.chat(aiMessages);
+        return aiService.chatWithTools(null, aiMessages);
     }
 }
